@@ -1,0 +1,2 @@
+from pyrosetta import *
+init()

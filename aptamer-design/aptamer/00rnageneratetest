@@ -1,0 +1,101 @@
+import os
+import subprocess
+from Bio.Seq import Seq
+from Bio.SeqRecord import SeqRecord
+from Bio import SeqIO
+from Bio.PDB import PDBIO, PDBParser, Select
+import pyrosetta
+import RNA
+
+# 初始化 PyRosetta
+pyrosetta.init()
+
+def write_fasta(seq, file_path):
+    """Write a sequence to a fasta file."""
+    record = SeqRecord(Seq(seq), id="Seq1", description="")
+    SeqIO.write(record, file_path, "fasta")
+    print(f"FASTA file written to {file_path}")
+
+def predict_secondary_structure(seq):
+    """Use ViennaRNA package to predict secondary structure."""
+    ss, mfe = RNA.fold(seq)
+    print(f"Predicted secondary structure: {ss} with MFE: {mfe}")
+    return ss
+
+def generate_pdb_from_secondary_structure(fasta_file, silent_file, rosetta_bin_path):
+    """Generate PDB file from secondary structure using Rosetta."""
+    command = f"{rosetta_bin_path}/rna_denovo.default.linuxgccrelease -fasta {fasta_file} -nstruct 1 -out:file:silent {silent_file}"
+    result = subprocess.run(command, shell=True, capture_output=True, text=True, env=os.environ)
+    print(f"Rosetta command output: {result.stdout}")
+    print(f"Rosetta command error (if any): {result.stderr}")
+    if result.returncode != 0:
+        raise RuntimeError("Rosetta rna_denovo command failed")
+
+def extract_pdb_from_silent(silent_file, output_pdb, rosetta_bin_path):
+    """Extract PDB from silent file using Rosetta."""
+    command = f"{rosetta_bin_path}/extract_pdbs.default.linuxgccrelease -in:file:silent {silent_file} -out:pdb"
+    result = subprocess.run(command, shell=True, capture_output=True, text=True, env=os.environ)
+    print(f"Rosetta extract_pdbs command output: {result.stdout}")
+    print(f"Rosetta extract_pdbs command error (if any): {result.stderr}")
+    if result.returncode != 0:
+        raise RuntimeError("Rosetta extract_pdbs command failed")
+
+    # Find the generated PDB file
+    silent_pdb_output = [f for f in os.listdir(".") if f.endswith(".pdb")]
+    if silent_pdb_output:
+        os.rename(silent_pdb_output[0], output_pdb)
+    else:
+        raise FileNotFoundError("No PDB file generated from silent file")
+
+def rna_to_pdb(rna_seq, output_dir, rosetta_bin_path):
+    """Convert RNA sequence to PDB format file."""
+    fasta_path = os.path.join(output_dir, "input.fasta")
+    ss_output_path = os.path.join(output_dir, "structure.dot")
+    pdb_output_silent = os.path.join(output_dir, "output.silent")
+    pdb_output_path = os.path.join(output_dir, "output.pdb")
+
+    # Write RNA sequence to fasta file
+    write_fasta(rna_seq, fasta_path)
+
+    # Predict secondary structure using ViennaRNA
+    ss = predict_secondary_structure(rna_seq)
+
+    # Generate PDB file from secondary structure
+    generate_pdb_from_secondary_structure(fasta_path, pdb_output_silent, rosetta_bin_path)
+
+    # Extract PDB file from silent file
+    extract_pdb_from_silent(pdb_output_silent, pdb_output_path, rosetta_bin_path)
+
+    return pdb_output_path
+
+class GlySelect(Select):
+    def accept_residue(self, residue):
+        """Accept only glycine residues."""
+        return residue.get_resname() == "GLY"
+
+def save_structure_with_glycine_only(pdb_file, output_pdb):
+    """Save structure with only glycine residues."""
+    parser = PDBParser()
+    structure = parser.get_structure("RNA", pdb_file)
+    io = PDBIO()
+    io.set_structure(structure)
+    io.save(output_pdb, GlySelect())
+    print(f"PDB file with glycine only saved to {output_pdb}")
+
+if __name__ == "__main__":
+    rna_sequence = "AUGGC"  # 示例RNA序列
+    output_directory = "."  # 当前目录
+    rosetta_bin_path = "/home/gxs/Rosetta/main/source/bin"  # Rosetta可执行文件路径
+
+    # 设置共享库路径
+    os.environ['LD_LIBRARY_PATH'] = '/home/gxs/Rosetta/main/source/lib'
+
+    try:
+        pdb_file = rna_to_pdb(rna_sequence, output_directory, rosetta_bin_path)
+        print(f"PDB file generated: {pdb_file}")
+
+        glycine_only_pdb = os.path.join(output_directory, "glycine_only.pdb")
+        save_structure_with_glycine_only(pdb_file, glycine_only_pdb)
+        print(f"Glycine only PDB file generated: {glycine_only_pdb}")
+    except Exception as e:
+        print(f"An error occurred: {e}")
